@@ -1,0 +1,369 @@
+<html>
+
+  <head>
+
+<meta charset="utf-8">
+<style>
+.chart div {
+   font: 10px sans-serif;
+   background-color: steelblue;
+   text-align: right;
+   padding: 3px;
+   margin: 1px;
+   color: white;
+ }
+ .chart rect {
+   stroke: white;
+   fill: steelblue;
+ }
+</style>
+
+<script type="text/javascript">
+  if (typeof setImmediate !== 'function') {
+    // Asynchronous setImmediate
+    
+    setImmediate = function setImmediate(func, param) {
+        'use strict';
+        return setTimeout(function () {
+            func(param);
+        }, 0);
+    };
+    
+    
+/*
+    // Synchronous setImmediate
+    setImmediate = function(func, param) {
+      func(param);
+    };
+    */
+  }
+
+
+
+
+  MONAD = function () {
+    var prototype = Object.create(null);
+    
+    function unit(value) {
+      var monad = Object.create(prototype);
+      monad.bind = function (func, args) {
+        return func.apply(
+          undefined,
+          [value].concat(Array.prototype.slice.apply(args || [])));
+      };
+      return monad;
+    }
+
+    unit.method = function (name, func) {
+      prototype[name] = func;
+      return unit;
+    }
+
+    unit.lift = function (name, func) {
+      prototype[name] = function (args) {
+        return unit(this.bind(
+          func, 
+          [].concat(Array.prototype.slice.apply(args || []))));
+      };
+      return unit;
+    };
+
+    return unit;
+  }
+  
+
+  S = (function() {
+
+    function enqueue(q, pfunc, next) {
+      var func = pfunc(next);
+      q[q.length] = 
+      function(value) {
+        try {
+          func(value);
+        } catch (e) {
+          console.log("error: " + e);
+          //breaker(e);
+        }
+      };
+    }
+
+    return {
+      make: function make() {
+        var sinks = [];
+        return {
+          put: function(value) {
+            value = JSON.parse(JSON.stringify(value));
+            sinks.forEach(function (func) {
+              setImmediate(func, value);
+            });
+          },
+          stream: {
+            is_stream: true,
+            map: function(func) {
+              var s = make();
+              enqueue(sinks, func, s.put);
+              return s.stream;
+            } 
+          }
+        };
+      }
+    }
+  }());
+  
+  // ----------------------------------------------------------------
+  over_window = 
+  function(w) {
+    return function(output) {
+      var stack = [];
+      return function(value) {
+        console.log("got value: " + JSON.stringify(value) + ".");         
+        //draw("got value: " + value + ".");
+        // console.log(typeof value);
+        // console.log(value.length);
+         if (value.length == undefined) {
+           data.shift();
+           data.push(value);
+           console.log(data);
+           redraw();
+         }
+        
+        
+        
+        stack.push(value);
+
+        if (stack.length == w) {
+          output(stack);
+          stack.length = 0;
+        }
+      };
+    };
+  }
+
+  consolelog = function(output) {
+    return function(value) {
+      console.log("output: " + JSON.stringify(value));
+      //draw("output: " + value);
+      output("hello " + JSON.stringify(value));
+    }
+  }
+
+  var sensor = S.make();
+
+  sensor.stream.map(over_window(2)).map(over_window(2)).map(consolelog);
+
+  for (ii = 10; ii <= 80; ii+=10) {
+    (function(ii) {
+      //setTimeout(function () { sensor.put(ii); }, (ii+1)*1000);
+       setTimeout(function () { sensor.put({'time': (new Date()).getTime(), 'value': ii}); }, ((ii / 10)+1)*1000);
+    })(ii);
+  }
+
+// $("movement").
+
+// device.on("screen", "off", function(signal) { $("screen").put(signal); }
+
+// $.publish {
+// }
+
+  // ----------------------------------------------------------------
+
+  VOW = (function() {
+    function enqueue(queue, func, resolver, breaker) {
+      queue[queue.length] = typeof func !== 'function'
+      ? resolver
+      : function(value) {
+        try {
+          var result = func(value);
+          if (result && result.is_promise === true) {
+            result.when(resolver, breaker);
+          } else {
+            resolver(result);
+          }
+        } catch (e) {
+          breaker(e);
+        }
+      };
+    }
+    
+    function enlighten(queue, fate) {
+      queue.forEach(function (func) {
+        setImmediate(func, fate);
+      });
+    }
+
+    return {
+      make: function make() {
+        var breakers = [];
+        var keepers = [];
+        var fate;
+        var status = 'pending';
+
+        function herald(state, value, queue) {
+          if (status !== 'pending') {
+            throw "overpromise";
+          }
+
+          fate = value;
+          status = state;
+          enlighten(queue, fate);
+          keepers.length = 0;
+          breakers.length = 0;
+        }
+
+        return {
+          // so keep and break here are two
+          // "artificial event" to trigger the promise??
+          break: function (reason) {
+            herald('broken', reason, breakers);
+          },
+          keep: function(value) {
+            herald('kept', value, keepers);
+          },
+          promise: {
+            is_promise: true,
+            when: function(kept, broken) {
+              var vow = make();
+              switch (status) {
+                case 'pending':
+                  enqueue(keepers, kept, vow.keep ,vow.break);
+                  enqueue(breakers, broken, vow.break, vow.break)
+                  break;
+                case 'kept':
+                  enqueue(keepers, kept, vow.keep, vow.break);
+                  enlighten(keepers, fate);
+                  break;
+                case 'broken':
+                  enqueue(breakers, broken, vow.break, vow.break);
+                  enlighten(breakers, fate);
+                  break;
+              }
+              return vow.promise;
+            } 
+          }
+        };
+      }
+    };
+  }());
+
+    
+  </script>
+  </head>
+
+  <body>
+  <script src="http://d3js.org/d3.v3.min.js"></script>
+  <script type="text/javascript">
+
+  //---------------------------------------------------
+  var data = [{"time": 1361493151457, "value": 0}];
+
+  var w = 100,
+      h = 80;
+  
+  var x = d3.scale.linear()
+      .domain([0, 1])
+      .range([0, w]);
+  
+  var y = d3.scale.linear()
+      .domain([0, 100])
+      .rangeRound([0, h]);
+
+
+  var chart = d3.select("body").append("svg")
+     .attr("class", "chart")
+     .attr("width", w * 8 - 1)
+     .attr("height", h);
+
+
+  chart.selectAll("rect")
+     .data(data)
+     .enter().append("rect")
+     .attr("x", function(d, i) { return x(i) - .5; })
+     .attr("y", function(d) { return h - y(d.value) - .5; })
+     .attr("width", w)
+     .attr("height", function(d) { return y(d.value); });
+
+ // chart.append("line")
+ //     .attr("x1", 0)
+ //     .attr("x2", w * data.length)
+ //     .attr("y1", h - .5)
+ //     .attr("y2", h - .5)
+ //     .style("stroke", "#000");
+
+  // function redraw() {
+  //   console.log("redraw received");
+  //   chart.selectAll("rect")
+  //       .data(data)
+  //       .transition()
+  //       .duration(1000)
+  //       .attr("y", function(d) { return h - y(d.value) - .5; })
+  //       .attr("height", function(d) { return y(d.value); });
+  // }
+
+  var count = 0;
+
+  function redraw() {
+    count++;
+    console.log(data.length);
+    var rect = chart.selectAll("rect")
+        .data(data, function(d) { return d.time; });
+  
+
+    // Enter…
+    rect.enter().insert("rect", "line")
+        .attr("x", function(d, i) { console.log(count * w); return count * w; })
+        .attr("y", function(d) { return h - y(d.value) - .5; })
+        .attr("width", w)
+       .attr("height", function(d) { return y(d.value); });
+ 
+    // Update…
+    rect.transition()
+        .duration(1000)
+        .attr("x", function(d, i) { return count * w; });
+  
+    // // Exit…
+    // rect.exit()
+    //     .remove();
+  
+  }
+
+  // function redraw() { 
+  //   var rect = chart.selectAll("rect")
+  //       .data(data, function(d) { return d.time; });
+  
+  //   rect.enter().insert("rect", "line")
+  //       .attr("x", function(d, i) { return x(i + 1) - .5; })
+  //       .attr("y", function(d) { return h - y(d.value) - .5; })
+  //       .attr("width", w)
+  //       .attr("height", function(d) { return y(d.value); })
+  //       .transition()
+  //       .duration(1000)
+  //       .attr("x", function(d, i) { return x(i) - .5; });
+ 
+  //   rect.transition()
+  //       .duration(1000)
+  //       .attr("x", function(d, i) { return x(i) - .5; });
+  
+  //   rect.exit().transition()
+  //       .duration(1000)
+  //       .attr("x", function(d, i) { return x(i - 1) - .5; })
+  //       .remove();
+  // }
+
+  //---------------------------------------------------
+  </script>
+    <p></p>
+<pre>
+  // MONADS and PROMISES
+  // https://github.com/douglascrockford/monad
+  // https://www.youtube.com/watch?v=b0EF0VTs9Dc
+
+
+  // EXAMPLE OF PROMISES
+  // vow = VOW.make(); vow.promise.when(alert, alert); vow.keep('yay')
+
+  // EXAMPLE OF MONAD
+  // var monad = MONAD().lift('alert', alert); monad("HELLO").alert()
+</pre>
+
+  </body>
+</html>
