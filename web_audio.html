@@ -1,0 +1,291 @@
+<html>
+
+  <head>
+  <script type="text/javascript">
+
+  if (typeof setImmediate !== 'function') {
+    // Asynchronous setImmediate
+    
+    setImmediate = function setImmediate(func, param) {
+        'use strict';
+        return setTimeout(function () {
+            func(param);
+        }, 0);
+    };
+    
+    
+/*
+    // Synchronous setImmediate
+    setImmediate = function(func, param) {
+      func(param);
+    };
+    */
+  }
+
+  MONAD = function () {
+    var prototype = Object.create(null);
+    
+    function unit(value) {
+      var monad = Object.create(prototype);
+      monad.bind = function (func, args) {
+        return func.apply(
+          undefined,
+          [value].concat(Array.prototype.slice.apply(args || [])));
+      };
+      return monad;
+    }
+
+    unit.method = function (name, func) {
+      prototype[name] = func;
+      return unit;
+    }
+
+    unit.lift = function (name, func) {
+      prototype[name] = function (args) {
+        return unit(this.bind(
+          func, 
+          [].concat(Array.prototype.slice.apply(args || []))));
+      };
+      return unit;
+    };
+
+    return unit;
+  }
+  
+
+  S = (function() {
+
+    function enqueue(q, pfunc, next) {
+      var func = pfunc(next);
+      q[q.length] = 
+      function(value) {
+        try {
+          func(value);
+        } catch (e) {
+          console.log("error: " + e);
+          //breaker(e);
+        }
+      };
+    }
+
+    return {
+      make: function make() {
+        var sinks = [];
+        return {
+          put: function(value) {
+            value = JSON.parse(JSON.stringify(value));
+            sinks.forEach(function (func) {
+              setImmediate(func, value);
+            });
+          },
+          stream: {
+            is_stream: true,
+            map: function(func) {
+              var s = make();
+              enqueue(sinks, func, s.put);
+              return s.stream;
+            } 
+          }
+        };
+      }
+    }
+  }());
+  
+  // ----------------------------------------------------------------
+  over_window = 
+  function(w) {
+    return function(output) {
+      var stack = [];
+      return function(value) {
+        //console.log("got value: " + JSON.stringify(value) + ".");
+        stack.push(value);
+
+        if (stack.length == w) {
+          output(stack);
+          stack.length = 0;
+        }
+      };
+    };
+  }
+
+  consolelog = function(output) {
+    return function(value) {
+      console.log("output: " + JSON.stringify(value));
+      output("hello " + JSON.stringify(value));
+    }
+  }
+
+  var sensor = S.make();
+
+  sensor.stream.map(over_window(1)).map(consolelog);
+
+  for (ii = 0; ii < 7; ++ii) {
+    (function(ii) {
+      setTimeout(function () { sensor.put({'value': ii, 'time': (new Date()).getTime()}); }, (ii+1)*0);
+    })(ii);
+  }
+
+// $("movement").
+
+// device.on("screen", "off", function(signal) { $("screen").put(signal); }
+
+// $.publish {
+// }
+
+  // ----------------------------------------------------------------
+
+  VOW = (function() {
+    function enqueue(queue, func, resolver, breaker) {
+      queue[queue.length] = typeof func !== 'function'
+      ? resolver
+      : function(value) {
+        try {
+          var result = func(value);
+          if (result && result.is_promise === true) {
+            result.when(resolver, breaker);
+          } else {
+            resolver(result);
+          }
+        } catch (e) {
+          breaker(e);
+        }
+      };
+    }
+    
+    function enlighten(queue, fate) {
+      queue.forEach(function (func) {
+        setImmediate(func, fate);
+      });
+    }
+
+    return {
+      make: function make() {
+        var breakers = [];
+        var keepers = [];
+        var fate;
+        var status = 'pending';
+
+        function herald(state, value, queue) {
+          if (status !== 'pending') {
+            throw "overpromise";
+          }
+
+          fate = value;
+          status = state;
+          enlighten(queue, fate);
+          keepers.length = 0;
+          breakers.length = 0;
+        }
+
+        return {
+          // so keep and break here are two
+          // "artificial event" to trigger the promise??
+          break: function (reason) {
+            herald('broken', reason, breakers);
+          },
+          keep: function(value) {
+            herald('kept', value, keepers);
+          },
+          promise: {
+            is_promise: true,
+            when: function(kept, broken) {
+              var vow = make();
+              switch (status) {
+                case 'pending':
+                  enqueue(keepers, kept, vow.keep ,vow.break);
+                  enqueue(breakers, broken, vow.break, vow.break)
+                  break;
+                case 'kept':
+                  enqueue(keepers, kept, vow.keep, vow.break);
+                  enlighten(keepers, fate);
+                  break;
+                case 'broken':
+                  enqueue(breakers, broken, vow.break, vow.break);
+                  enlighten(breakers, fate);
+                  break;
+              }
+              return vow.promise;
+            } 
+          }
+        };
+      }
+    };
+  }());
+
+  
+  // ------------------------------------
+  // https://github.com/mattdiamond/Recorderjs
+  var input;
+  var audio_context;
+  var sensor_on = false;
+  var d;
+
+  function gotAudio(stream) {
+    
+    console.log(stream);
+    input = audio_context.createMediaStreamSource(stream);
+    node = audio_context.createScriptProcessor(4096, 1, 1);
+
+    node.onaudioprocess = function(e) {
+      if (sensor_on == false) return;
+
+      var data = e.inputBuffer.getChannelData(0);
+
+      sensor_on = false;  
+
+        setTimeout(function() {
+          sensor.put(data)
+        }, 0);
+    }
+    
+    input.connect(node);
+    node.connect(audio_context.destination);  // idealy unnecessary.
+  }
+
+
+  window.onload = function init() {
+    try {
+      // webkit shim
+      window.AudioContext = window.AudioContext || window.webkitAudioContext;
+      navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia;
+      window.URL = window.URL || window.webkitURL;
+      
+      audio_context = new AudioContext;
+    } catch (e) {
+      console.log('No web audio support in this browser!');
+    }
+    
+    navigator.getUserMedia({audio: true}, gotAudio, function(e) {});
+
+    /*    
+    var source;
+    var audio_element;
+    audio_element = document.createElement('audio');
+    audio_element.setAttribute('src', '16b_8k.wav');
+    source = 
+        audio_context.createMediaElementSource(audio_element);
+    source.connect(audio_context.destination);
+    */
+    
+  };
+  </script>
+  </head>
+  <body>
+<pre>
+  // MONADS and PROMISES
+  // https://github.com/douglascrockford/monad
+  // https://www.youtube.com/watch?v=b0EF0VTs9Dc
+
+
+  // EXAMPLE OF PROMISES
+  // vow = VOW.make(); vow.promise.when(alert, alert); vow.keep('yay')
+
+  // EXAMPLE OF MONAD
+  // var monad = MONAD().lift('alert', alert); monad("HELLO").alert()
+</pre>
+
+  <a href="javascript:sensor_on=true;">Turn ON MIC forwarding</a>
+  <a href="javascript:sensor_on=false;">Turn OFF MIC forwarding</a>
+
+  </body>
+</html>
