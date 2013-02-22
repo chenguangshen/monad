@@ -1,0 +1,315 @@
+<html>
+
+  <head>
+    <style>
+      /* tell the SVG path to be a thin blue line without any area fill */
+      path {
+        stroke: steelblue;
+        stroke-width: 1;
+        fill: none;
+      }
+      
+      .axis {
+        shape-rendering: crispEdges;
+      }
+
+      .x.axis line {
+        stroke: lightgrey;
+      }
+
+      .x.axis .minor {
+        stroke-opacity: .5;
+      }
+
+      .x.axis path {
+        display: none;
+      }
+
+      .y.axis line, .y.axis path {
+        fill: none;
+        stroke: #000;
+      }
+    </style>
+    <script src="./d3.min.js"></script>
+  <script type="text/javascript">
+  var FFT = (function() {
+    "use strict";
+    
+    var FFT = function() {
+        initialize.apply(this, arguments);
+    }, $this = FFT.prototype;
+    
+    var FFT_PARAMS = {
+        get: function(n) {
+            return FFT_PARAMS[n] || (function() {
+                var bitrev = (function() {
+                    var x, i, j, k, n2;
+                    x = new Int16Array(n);
+                    n2 = n >> 1;
+                    i = j = 0;
+                    for (;;) {
+                        x[i] = j;
+                        if (++i >= n) break;
+                        k = n2;
+                        while (k <= j) { j -= k; k >>= 1; }
+                        j += k;
+                    }
+                    return x;
+                }());
+                var i, k = Math.floor(Math.log(n) / Math.LN2);
+                var sintable = new Float32Array((1<<k)-1);
+                var costable = new Float32Array((1<<k)-1);
+                var PI2 = Math.PI * 2;
+                
+                for (i = sintable.length; i--; ) {
+                    sintable[i] = Math.sin(PI2 * (i / n));
+                    costable[i] = Math.cos(PI2 * (i / n));
+                }
+                return FFT_PARAMS[n] = {
+                    bitrev: bitrev, sintable:sintable, costable:costable
+                };
+            }());
+        }
+    };
+    
+    var initialize = function(n) {
+        n = (typeof n === "number") ? n : 512;
+        n = 1 << Math.ceil(Math.log(n) * Math.LOG2E);
+        
+        this.length = n;
+        this.buffer = new Float32Array(n);
+        this.real   = new Float32Array(n);
+        this.imag   = new Float32Array(n);
+        this._real  = new Float32Array(n);
+        this._imag  = new Float32Array(n);
+        
+        var params = FFT_PARAMS.get(n);
+        this._bitrev   = params.bitrev;
+        this._sintable = params.sintable;
+        this._costable = params.costable;
+    };
+    
+    $this.forward = function(_buffer) {
+        var buffer, real, imag, bitrev, sintable, costable;
+        var i, j, n, k, k2, h, d, c, s, ik, dx, dy;
+        
+        buffer = this.buffer;
+        real   = this.real;
+        imag   = this.imag;
+        bitrev = this._bitrev;
+        sintable = this._sintable;
+        costable = this._costable;
+        n = buffer.length;
+        
+        for (i = n; i--; ) {
+            buffer[i] = _buffer[i];
+            real[i]   = _buffer[bitrev[i]];
+            imag[i]   = 0.0;
+        }
+        
+        for (k = 1; k < n; k = k2) {
+            h = 0; k2 = k + k; d = n / k2;
+            for (j = 0; j < k; j++) {
+                c = costable[h];
+                s = sintable[h];
+                for (i = j; i < n; i += k2) {
+                    ik = i + k;
+                    dx = s * imag[ik] + c * real[ik];
+                    dy = c * imag[ik] - s * real[ik];
+                    real[ik] = real[i] - dx; real[i] += dx;
+                    imag[ik] = imag[i] - dy; imag[i] += dy;
+                }
+                h += d;
+            }
+        }
+        return {real:real, imag:imag};
+    };
+    
+    $this.inverse = function(_real, _imag) {
+        var buffer, real, imag, bitrev, sintable, costable;
+        var i, j, n, k, k2, h, d, c, s, ik, dx, dy, t;
+        
+        buffer = this.buffer;
+        real   = this._real;
+        imag   = this._imag;
+        bitrev = this._bitrev;
+        sintable = this._sintable;
+        costable = this._costable;
+        n = buffer.length;
+        
+        for (i = n; i--; ) {
+            j = bitrev[i];
+            real[i] = +_real[j];
+            imag[i] = -_imag[j];
+        }
+        
+        for (k = 1; k < n; k = k2) {
+            h = 0; k2 = k + k; d = n / k2;
+            for (j = 0; j < k; j++) {
+                c = costable[h];
+                s = sintable[h];
+                for (i = j; i < n; i += k2) {
+                    ik = i + k;
+                    dx = s * imag[ik] + c * real[ik];
+                    dy = c * imag[ik] - s * real[ik];
+                    real[ik] = real[i] - dx; real[i] += dx;
+                    imag[ik] = imag[i] - dy; imag[i] += dy;
+                }
+                h += d;
+            }
+        }
+        
+        for (i = n; i--; ) {
+            buffer[i] = real[i] / n;
+        }
+        return buffer;
+    };
+    
+    return FFT;
+}());
+
+  // ------------------------------------
+  // https://github.com/mattdiamond/Recorderjs
+  var input;
+  var audio_context;
+  var sensor_on = false;
+  var d;
+  var data;
+  var audio_data;
+
+  var fft = new FFT(16384);
+
+  function gotAudio(stream) {
+    
+    console.log(stream);
+    input = audio_context.createMediaStreamSource(stream);
+    node = audio_context.createScriptProcessor(16384, 1, 1);
+
+    node.onaudioprocess = function(e) {
+      if(sensor_on == true) {
+
+        audio_data = e.inputBuffer.getChannelData(0);
+        spectrum = fft.forward(audio_data);
+        data = spectrum.real;
+        console.log(data);
+        sensor_on = false;
+
+
+    // define dimensions of graph
+    var m = [80, 80, 80, 80]; // margins
+    var w = 1000 - m[1] - m[3]; // width
+    var h = 400 - m[0] - m[2]; // height
+
+    // X scale will fit all values from data[] within pixels 0-w
+    var x = d3.scale.linear().domain([0, data.length]).range([0, w]);
+    // Y scale will fit values from 0-10 within pixels h-0 (Note the inverted domain for the y-scale: bigger is up!)
+    var y = d3.scale.linear().domain([-2, 2]).range([h, 0]);
+      // automatically determining max range can work something like this
+      // var y = d3.scale.linear().domain([0, d3.max(data)]).range([h, 0]);
+
+    // create a line function that can convert data[] into x and y points
+    var line = d3.svg.line()
+      // assign the X function to plot our line as we wish
+      .x(function(d,i) { 
+        // verbose logging to show what's actually being done
+        console.log('Plotting X value for data point: ' + d + ' using index: ' + i + ' to be at: ' + x(i) + ' using our xScale.');
+        // return the X coordinate where we want to plot this datapoint
+        return x(i); 
+      })
+      .y(function(d) { 
+        // verbose logging to show what's actually being done
+        console.log('Plotting Y value for data point: ' + d + ' to be at: ' + y(d) + " using our yScale.");
+        // return the Y coordinate where we want to plot this datapoint
+        return y(d); 
+      })
+
+      // Add an SVG element with the desired dimensions and margin.
+      var graph = d3.select("#graph").append("svg:svg")
+            .attr("width", w + m[1] + m[3])
+            .attr("height", h + m[0] + m[2])
+          .append("svg:g")
+            .attr("transform", "translate(" + m[3] + "," + m[0] + ")");
+
+      // create yAxis
+      var xAxis = d3.svg.axis().scale(x).tickSize(-h).tickSubdivide(true);
+      // Add the x-axis.
+      graph.append("svg:g")
+            .attr("class", "x axis")
+            .attr("transform", "translate(0," + h + ")")
+            .call(xAxis);
+
+
+      // create left yAxis
+      var yAxisLeft = d3.svg.axis().scale(y).ticks(4).orient("left");
+      // Add the y-axis to the left
+      graph.append("svg:g")
+            .attr("class", "y axis")
+            .attr("transform", "translate(-25,0)")
+            .call(yAxisLeft);
+      
+        // Add the line by appending an svg:path element with the data line we created above
+      // do this AFTER the axes above so that the line is above the tick-lines
+        graph.append("svg:path").attr("d", line(data));
+
+      }
+
+    }
+    
+    input.connect(node);
+    node.connect(audio_context.destination);  // idealy unnecessary.
+  }
+
+
+  window.onload = function init() {
+    try {
+      // webkit shim
+      window.AudioContext = window.AudioContext || window.webkitAudioContext;
+      navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia;
+      window.URL = window.URL || window.webkitURL;
+      
+      audio_context = new AudioContext;
+    } catch (e) {
+      console.log('No web audio support in this browser!');
+    }
+    
+    navigator.getUserMedia({audio: true}, gotAudio, function(e) {});
+
+    /*    
+    var source;
+    var audio_element;
+    audio_element = document.createElement('audio');
+    audio_element.setAttribute('src', '16b_8k.wav');
+    source = 
+        audio_context.createMediaElementSource(audio_element);
+    source.connect(audio_context.destination);
+    */
+
+    };
+  </script>
+  </head>
+  <body>
+<!-- <pre>
+  // MONADS and PROMISES
+  // https://github.com/douglascrockford/monad
+  // https://www.youtube.com/watch?v=b0EF0VTs9Dc
+
+
+  // EXAMPLE OF PROMISES
+  // vow = VOW.make(); vow.promise.when(alert, alert); vow.keep('yay')
+
+  // EXAMPLE OF MONAD
+  // var monad = MONAD().lift('alert', alert); monad("HELLO").alert()
+</pre> -->
+  <div id="graph" class="aGraph" style="position:absolute;top:0px;left:0; float:left;"></div>
+
+
+  <script>
+
+
+  </script>
+
+  <a href="javascript:sensor_on=true;">Turn ON MIC forwarding</a>
+  <a href="javascript:sensor_on=false;">Turn OFF MIC forwarding</a>
+
+  </body>
+</html>
